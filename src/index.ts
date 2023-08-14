@@ -1,15 +1,22 @@
 import express from 'express';
-import { ApolloServer, gql } from 'apollo-server-express';
+import { ApolloServer } from '@apollo/server';
+import { expressMiddleware } from '@apollo/server/express4';
+import http from 'http';
+import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHttpServer';
+import cors from 'cors';
+import { json } from 'body-parser';
 import sqlite3 from 'sqlite3';
+import { gql } from 'graphql-tag';
 
-// Setup SQLite
+// Initialize SQLite in-memory database
 const db = new sqlite3.Database(':memory:');
 
+// Create a table named 'items' in the database
 db.serialize(() => {
   db.run("CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT)");
 });
 
-// GraphQL type definitions and resolvers
+// Define GraphQL type definitions for our API
 const typeDefs = gql`
     type Item {
         id: ID!
@@ -25,9 +32,11 @@ const typeDefs = gql`
     }
 `;
 
+// Define resolvers for the GraphQL API
 const resolvers = {
     Query: {
         items: () => {
+            // Fetch all items from the database
             return new Promise((resolve, reject) => {
                 db.all("SELECT id, name FROM items", [], (err, rows) => {
                     if (err) {
@@ -41,6 +50,7 @@ const resolvers = {
     },
     Mutation: {
         addItem: (_: any, { name }: any) => {
+            // Add a new item to the database
             return new Promise((resolve, reject) => {
                 const stmt = db.prepare("INSERT INTO items (id, name) VALUES (?, ?)");
                 const id = Date.now().toString();
@@ -57,18 +67,33 @@ const resolvers = {
     }
 };
 
-const server = new ApolloServer({ typeDefs, resolvers });
+// Initialize Express application and HTTP server
 const app = express();
+const httpServer = http.createServer(app);
+const server = new ApolloServer({
+  typeDefs,
+  resolvers,
+  plugins: [
+    ApolloServerPluginDrainHttpServer({ httpServer }),
+  ],
+});
 
-
+// Function to start the GraphQL server
 async function startServer() {
     await server.start();
-    server.applyMiddleware({ app });
 
-    app.listen({ port: 4000 }, () => {
-        console.log(`Server ready at http://localhost:4000${server.graphqlPath}`);
-    });
+    // Set up middleware for GraphQL server
+    app.use(
+      '/graphql',
+      cors(),  // Allow cross-origin requests
+      json(),  // Parse JSON request bodies
+      expressMiddleware(server)  // Connect Apollo server with Express
+    );
+
+    // Start the HTTP server on port 4000
+    await new Promise<void>(resolve => httpServer.listen({ port: 4000 }, resolve));
+    console.log(`🚀 Server ready at http://localhost:4000/graphql`);
 }
 
-// Call the function to start the server
+// Kick off the server
 startServer();
